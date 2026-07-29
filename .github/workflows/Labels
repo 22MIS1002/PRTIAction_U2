@@ -1,0 +1,118 @@
+name: PR Review Comment Classifier
+
+on:
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  validate-comment-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check comment classification
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body    = context.payload.comment.body || '';
+            const commentId = context.payload.comment.id;
+            const prNumber  = context.payload.pull_request.number;
+            const owner     = context.repo.owner;
+            const repo      = context.repo.repo;
+            const reviewer  = context.payload.comment.user.login;
+
+            // ── Label Groups ────────────────────────────────
+            const TYPE_QUESTION = '[QUESTION]';
+            const TYPE_DEFECT   = '[DEFECT]';
+
+            const RANKING = ['[MAJOR]', '[MINOR]'];
+
+            const CLASSIFICATION = [
+              '[MISSING]',
+              '[EXTRA/SUPERFLUOUS]',
+              '[AMBIGUOUS]',
+              '[INCONSISTENT]',
+              '[IMPROVEMENT DESIRABLE]',
+              '[NOT CONFORMING TO STANDARDS]',
+              '[RISK-PRONE]',
+              '[FACTUALLY INCORRECT]',
+              '[NOT IMPLEMENTABLE]',
+              '[EDITORIAL]'
+            ];
+
+            const upperBody = body.toUpperCase();
+
+            const hasQuestion       = upperBody.includes(TYPE_QUESTION);
+            const hasDefect         = upperBody.includes(TYPE_DEFECT);
+            const hasRanking        = RANKING.some(r => upperBody.includes(r));
+            const hasClassification = CLASSIFICATION.some(c => upperBody.includes(c));
+
+            // ── CASE 1: No type label at all ─────────────────
+            if (!hasQuestion && !hasDefect) {
+              await github.rest.pulls.createReplyForReviewComment({
+                owner, repo,
+                pull_number: prNumber,
+                comment_id:  commentId,
+                body: `👋 @${reviewer} — please classify this comment by adding a **Type** label at the start:\n\n` +
+                      `| Type | Use When |\n|---|---|\n` +
+                      `| \`**[QUESTION]**\` | You need clarification or have a question |\n` +
+                      `| \`**[DEFECT]**\` | You found an issue in the code |\n\n` +
+                      `> 💡 If you select **[DEFECT]**, you must also add one **Ranking** label and one **Classification** label.`
+              });
+              return;
+            }
+
+            // ── CASE 2: [QUESTION] — no other labels needed ──
+            if (hasQuestion) {
+              // Valid — do nothing
+              console.log('✅ Comment classified as QUESTION — no further action needed.');
+              return;
+            }
+
+            // ── CASE 3: [DEFECT] — check Ranking + Classification
+            if (hasDefect) {
+              const missingRanking        = !hasRanking;
+              const missingClassification = !hasClassification;
+
+              if (!missingRanking && !missingClassification) {
+                // Fully classified — do nothing
+                console.log('✅ Comment fully classified as DEFECT with Ranking and Classification.');
+                return;
+              }
+
+              // Build reminder message
+              let reminder = `👋 @${reviewer} — your **[DEFECT]** comment needs more labels:\n\n`;
+
+              if (missingRanking) {
+                reminder += `❌ **Ranking label missing** — please add one:\n\n` +
+                            `| Label | Use When |\n|---|---|\n` +
+                            `| \`🔴 **[MAJOR]**\` | Significant issue, must fix before merge |\n` +
+                            `| \`🟡 **[MINOR]**\` | Small issue, low impact |\n\n`;
+              }
+
+              if (missingClassification) {
+                reminder += `❌ **Classification label missing** — please add one:\n\n` +
+                            `| Label | Meaning |\n|---|---|\n` +
+                            `| \`🔴 **[MISSING]**\` | Something required is absent |\n` +
+                            `| \`🟡 **[EXTRA/SUPERFLUOUS]**\` | Something unnecessary is present |\n` +
+                            `| \`🟠 **[AMBIGUOUS]**\` | Code/logic is unclear |\n` +
+                            `| \`🟠 **[INCONSISTENT]**\` | Inconsistent with other parts |\n` +
+                            `| \`🟢 **[IMPROVEMENT DESIRABLE]**\` | Not a bug, but improvement needed |\n` +
+                            `| \`🟠 **[NOT CONFORMING TO STANDARDS]**\` | Violates coding standards |\n` +
+                            `| \`🔴 **[RISK-PRONE]**\` | Risky code, could cause issues |\n` +
+                            `| \`🔴 **[FACTUALLY INCORRECT]**\` | Logic or data is wrong |\n` +
+                            `| \`🔴 **[NOT IMPLEMENTABLE]**\` | Cannot be implemented as written |\n` +
+                            `| \`🔵 **[EDITORIAL]**\` | Typo, grammar, or formatting |\n\n`;
+              }
+
+              reminder += `> 💡 Edit your comment to add the missing labels above.`;
+
+              await github.rest.pulls.createReplyForReviewComment({
+                owner, repo,
+                pull_number: prNumber,
+                comment_id:  commentId,
+                body: reminder
+              });
+            }
