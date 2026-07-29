@@ -2,7 +2,7 @@ name: PR Review Comment Classifier
 
 on:
   pull_request_review_comment:
-    types: [created]
+    types: [created, edited]   # ← also triggers on edit
 
 permissions:
   pull-requests: write
@@ -10,109 +10,152 @@ permissions:
 jobs:
   validate-comment-label:
     runs-on: ubuntu-latest
+
+    # Skip if the comment is FROM the bot itself — prevents infinite loop
+    if: github.event.comment.user.login != 'github-actions[bot]'
+
     steps:
-      - name: Check comment classification
+      - name: Validate and manage classification
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const body    = context.payload.comment.body || '';
+            const body      = context.payload.comment.body || '';
             const commentId = context.payload.comment.id;
             const prNumber  = context.payload.pull_request.number;
             const owner     = context.repo.owner;
             const repo      = context.repo.repo;
             const reviewer  = context.payload.comment.user.login;
 
-            // ── Label Groups ────────────────────────────────
-            const TYPE_QUESTION = '[QUESTION]';
-            const TYPE_DEFECT   = '[DEFECT]';
+            // ── Normalize body — strip markdown bold ** and uppercase
+            const normalized = body.replace(/\*\*/g, '').toUpperCase().trim();
 
-            const RANKING = ['[MAJOR]', '[MINOR]'];
+            console.log('Normalized comment body:', normalized);
 
+            // ── Label Groups ──────────────────────────────────
+            const RANKING        = ['[MAJOR]', '[MINOR]'];
             const CLASSIFICATION = [
-              '[MISSING]',
-              '[EXTRA/SUPERFLUOUS]',
-              '[AMBIGUOUS]',
-              '[INCONSISTENT]',
-              '[IMPROVEMENT DESIRABLE]',
-              '[NOT CONFORMING TO STANDARDS]',
-              '[RISK-PRONE]',
-              '[FACTUALLY INCORRECT]',
-              '[NOT IMPLEMENTABLE]',
-              '[EDITORIAL]'
+              '[MISSING]', '[EXTRA/SUPERFLUOUS]', '[AMBIGUOUS]',
+              '[INCONSISTENT]', '[IMPROVEMENT DESIRABLE]',
+              '[NOT CONFORMING TO STANDARDS]', '[RISK-PRONE]',
+              '[FACTUALLY INCORRECT]', '[NOT IMPLEMENTABLE]', '[EDITORIAL]'
             ];
 
-            const upperBody = body.toUpperCase();
+            const hasQuestion       = normalized.includes('[QUESTION]');
+            const hasDefect         = normalized.includes('[DEFECT]');
+            const hasRanking        = RANKING.some(r => normalized.includes(r));
+            const hasClassification = CLASSIFICATION.some(c => normalized.includes(c));
 
-            const hasQuestion       = upperBody.includes(TYPE_QUESTION);
-            const hasDefect         = upperBody.includes(TYPE_DEFECT);
-            const hasRanking        = RANKING.some(r => upperBody.includes(r));
-            const hasClassification = CLASSIFICATION.some(c => upperBody.includes(c));
-
-            // ── CASE 1: No type label at all ─────────────────
-            if (!hasQuestion && !hasDefect) {
-              await github.rest.pulls.createReplyForReviewComment({
-                owner, repo,
-                pull_number: prNumber,
-                comment_id:  commentId,
-                body: `👋 @${reviewer} — please classify this comment by adding a **Type** label at the start:\n\n` +
-                      `| Type | Use When |\n|---|---|\n` +
-                      `| \`**[QUESTION]**\` | You need clarification or have a question |\n` +
-                      `| \`**[DEFECT]**\` | You found an issue in the code |\n\n` +
-                      `> 💡 If you select **[DEFECT]**, you must also add one **Ranking** label and one **Classification** label.`
+            // ── Helper: Find existing bot reply for this comment ──
+            async function findExistingBotReply() {
+              const comments = await github.rest.pulls.listReviewComments({
+                owner, repo, pull_number: prNumber, per_page: 100
               });
+              return comments.data.find(c =>
+                c.user.login === 'github-actions[bot]' &&
+                c.in_reply_to_id === commentId
+              );
+            }
+
+            // ── Helper: Delete bot reply ──────────────────────
+            async function deleteBotReply(botComment) {
+              if (botComment) {
+                await github.rest.pulls.deleteReviewComment({
+                  owner, repo, comment_id: botComment.id
+                });
+                console.log('🗑️ Deleted bot reply — comment is now fully classified.');
+              }
+            }
+
+            // ── Helper: Post or Update bot reply ─────────────
+            async function postBotReply(message) {
+              const existing = await findExistingBotReply();
+              if (existing) {
+                // Update existing bot reply instead of posting a new one
+                await github.rest.pulls.updateReviewComment({
+                  owner, repo,
+                  comment_id: existing.id,
+                  body: message
+                });
+                console.log('✏️ Updated existing bot reply.');
+              } else {
+                await github.rest.pulls.createReplyForReviewComment({
+                  owner, repo,
+                  pull_number: prNumber,
+                  comment_id:  commentId,
+                  body: message
+                });
+                console.log('💬 Posted new bot reply.');
+              }
+            }
+
+            // ════════════════════════════════════════════════
+            // CASE 1: No type label at all
+            // ════════════════════════════════════════════════
+            if (!hasQuestion && !hasDefect) {
+              await postBotReply(
+                `👋 @${reviewer} — please classify this comment by adding a **Type** label at the start:\n\n` +
+                `| Type | Use When |\n|---|---|\n` +
+                `| \`**[QUESTION]**\` | You need clarification or have a question |\n` +
+                `| \`**[DEFECT]**\` | You found an issue in the code |\n\n` +
+                `> 💡 If you select **[DEFECT]**, you must also add one **Ranking** label and one **Classification** label.`
+              );
               return;
             }
 
-            // ── CASE 2: [QUESTION] — no other labels needed ──
+            // ════════════════════════════════════════════════
+            // CASE 2: [QUESTION] — valid, delete any bot reply
+            // ════════════════════════════════════════════════
             if (hasQuestion) {
-              // Valid — do nothing
-              console.log('✅ Comment classified as QUESTION — no further action needed.');
+              const existing = await findExistingBotReply();
+              await deleteBotReply(existing);
+              console.log('✅ QUESTION — fully valid.');
               return;
             }
 
-            // ── CASE 3: [DEFECT] — check Ranking + Classification
+            // ════════════════════════════════════════════════
+            // CASE 3: [DEFECT] — check Ranking + Classification
+            // ════════════════════════════════════════════════
             if (hasDefect) {
               const missingRanking        = !hasRanking;
               const missingClassification = !hasClassification;
 
+              // Fully classified — delete bot reply if exists
               if (!missingRanking && !missingClassification) {
-                // Fully classified — do nothing
-                console.log('✅ Comment fully classified as DEFECT with Ranking and Classification.');
+                const existing = await findExistingBotReply();
+                await deleteBotReply(existing);
+                console.log('✅ DEFECT fully classified — Ranking ✅ Classification ✅');
                 return;
               }
 
-              // Build reminder message
+              // Build reminder only for what is missing
               let reminder = `👋 @${reviewer} — your **[DEFECT]** comment needs more labels:\n\n`;
 
               if (missingRanking) {
-                reminder += `❌ **Ranking label missing** — please add one:\n\n` +
-                            `| Label | Use When |\n|---|---|\n` +
-                            `| \`🔴 **[MAJOR]**\` | Significant issue, must fix before merge |\n` +
-                            `| \`🟡 **[MINOR]**\` | Small issue, low impact |\n\n`;
+                reminder +=
+                  `❌ **Ranking label missing** — please add one:\n\n` +
+                  `| Label | Use When |\n|---|---|\n` +
+                  `| \`🔴 **[MAJOR]**\` | Significant issue — must fix before merge |\n` +
+                  `| \`🟡 **[MINOR]**\` | Small issue — low impact |\n\n`;
               }
 
               if (missingClassification) {
-                reminder += `❌ **Classification label missing** — please add one:\n\n` +
-                            `| Label | Meaning |\n|---|---|\n` +
-                            `| \`🔴 **[MISSING]**\` | Something required is absent |\n` +
-                            `| \`🟡 **[EXTRA/SUPERFLUOUS]**\` | Something unnecessary is present |\n` +
-                            `| \`🟠 **[AMBIGUOUS]**\` | Code/logic is unclear |\n` +
-                            `| \`🟠 **[INCONSISTENT]**\` | Inconsistent with other parts |\n` +
-                            `| \`🟢 **[IMPROVEMENT DESIRABLE]**\` | Not a bug, but improvement needed |\n` +
-                            `| \`🟠 **[NOT CONFORMING TO STANDARDS]**\` | Violates coding standards |\n` +
-                            `| \`🔴 **[RISK-PRONE]**\` | Risky code, could cause issues |\n` +
-                            `| \`🔴 **[FACTUALLY INCORRECT]**\` | Logic or data is wrong |\n` +
-                            `| \`🔴 **[NOT IMPLEMENTABLE]**\` | Cannot be implemented as written |\n` +
-                            `| \`🔵 **[EDITORIAL]**\` | Typo, grammar, or formatting |\n\n`;
+                reminder +=
+                  `❌ **Classification label missing** — please add one:\n\n` +
+                  `| Label | Meaning |\n|---|---|\n` +
+                  `| \`🔴 **[MISSING]**\` | Something required is absent |\n` +
+                  `| \`🟡 **[EXTRA/SUPERFLUOUS]**\` | Something unnecessary is present |\n` +
+                  `| \`🟠 **[AMBIGUOUS]**\` | Code or logic is unclear |\n` +
+                  `| \`🟠 **[INCONSISTENT]**\` | Inconsistent with other parts |\n` +
+                  `| \`🟢 **[IMPROVEMENT DESIRABLE]**\` | Not a bug but improvement needed |\n` +
+                  `| \`🟠 **[NOT CONFORMING TO STANDARDS]**\` | Violates coding standards |\n` +
+                  `| \`🔴 **[RISK-PRONE]**\` | Risky code, could cause issues |\n` +
+                  `| \`🔴 **[FACTUALLY INCORRECT]**\` | Logic or data is wrong |\n` +
+                  `| \`🔴 **[NOT IMPLEMENTABLE]**\` | Cannot be implemented as written |\n` +
+                  `| \`🔵 **[EDITORIAL]**\` | Typo, grammar, or formatting |\n\n`;
               }
 
-              reminder += `> 💡 Edit your comment to add the missing labels above.`;
+              reminder += `> ✏️ Please **edit your comment** above to add the missing labels, and this message will be removed automatically.`;
 
-              await github.rest.pulls.createReplyForReviewComment({
-                owner, repo,
-                pull_number: prNumber,
-                comment_id:  commentId,
-                body: reminder
-              });
+              await postBotReply(reminder);
             }
