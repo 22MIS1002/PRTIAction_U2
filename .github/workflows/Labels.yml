@@ -2,7 +2,7 @@ name: PR Review Comment Classifier
 
 on:
   pull_request_review_comment:
-    types: [created, edited]   # ← also triggers on edit
+    types: [created, edited]
 
 permissions:
   pull-requests: write
@@ -11,7 +11,6 @@ jobs:
   validate-comment-label:
     runs-on: ubuntu-latest
 
-    # Skip if the comment is FROM the bot itself — prevents infinite loop
     if: github.event.comment.user.login != 'github-actions[bot]'
 
     steps:
@@ -26,13 +25,20 @@ jobs:
             const owner     = context.repo.owner;
             const repo      = context.repo.repo;
             const reviewer  = context.payload.comment.user.login;
+            const eventType = context.payload.action; // 'created' or 'edited'
 
-            // ── Normalize body — strip markdown bold ** and uppercase
+            // ── Normalize — strip ** markdown and uppercase ──
             const normalized = body.replace(/\*\*/g, '').toUpperCase().trim();
 
-            console.log('Normalized comment body:', normalized);
+            // ── DEBUG — always log these so we can trace issues
+            console.log('=== CLASSIFIER DEBUG ===');
+            console.log('Event type     :', eventType);
+            console.log('Comment ID     :', commentId);
+            console.log('PR Number      :', prNumber);
+            console.log('Raw body       :', body);
+            console.log('Normalized body:', normalized);
 
-            // ── Label Groups ──────────────────────────────────
+            // ── Label Groups ─────────────────────────────────
             const RANKING        = ['[MAJOR]', '[MINOR]'];
             const CLASSIFICATION = [
               '[MISSING]', '[EXTRA/SUPERFLUOUS]', '[AMBIGUOUS]',
@@ -46,38 +52,88 @@ jobs:
             const hasRanking        = RANKING.some(r => normalized.includes(r));
             const hasClassification = CLASSIFICATION.some(c => normalized.includes(c));
 
-            // ── Helper: Find existing bot reply for this comment ──
+            console.log('hasQuestion       :', hasQuestion);
+            console.log('hasDefect         :', hasDefect);
+            console.log('hasRanking        :', hasRanking);
+            console.log('hasClassification :', hasClassification);
+
+            // ── Find existing bot reply ───────────────────────
+            // Fetch ALL review comments and log them for debug
             async function findExistingBotReply() {
-              const comments = await github.rest.pulls.listReviewComments({
-                owner, repo, pull_number: prNumber, per_page: 100
+              let page = 1;
+              let allComments = [];
+
+              // Paginate through ALL comments — not just first 100
+              while (true) {
+                const res = await github.rest.pulls.listReviewComments({
+                  owner, repo, pull_number: prNumber,
+                  per_page: 100, page
+                });
+                allComments = allComments.concat(res.data);
+                if (res.data.length < 100) break;
+                page++;
+              }
+
+              console.log(`Total review comments fetched: ${allComments.length}`);
+
+              // Log all bot comments to trace matching
+              const botComments = allComments.filter(c => c.user.login === 'github-actions[bot]');
+              console.log(`Bot comments found: ${botComments.length}`);
+              botComments.forEach(c => {
+                console.log(`  Bot comment id=${c.id} in_reply_to_id=${c.in_reply_to_id}`);
               });
-              return comments.data.find(c =>
+
+              // Match by in_reply_to_id first
+              let match = allComments.find(c =>
                 c.user.login === 'github-actions[bot]' &&
                 c.in_reply_to_id === commentId
               );
+
+              // Fallback: if in_reply_to_id didn't match,
+              // check if bot comment body references the reviewer
+              // (handles cases where in_reply_to_id is absent)
+              if (!match) {
+                console.log('⚠️ in_reply_to_id match failed — trying fallback body match...');
+                match = allComments.find(c =>
+                  c.user.login === 'github-actions[bot]' &&
+                  c.body.includes(`@${reviewer}`) &&
+                  c.path === context.payload.comment.path &&
+                  c.position === context.payload.comment.position
+                );
+              }
+
+              if (match) {
+                console.log(`✅ Bot reply found: id=${match.id}`);
+              } else {
+                console.log('ℹ️ No existing bot reply found.');
+              }
+
+              return match;
             }
 
-            // ── Helper: Delete bot reply ──────────────────────
-            async function deleteBotReply(botComment) {
-              if (botComment) {
+            // ── Delete bot reply ──────────────────────────────
+            async function deleteBotReply() {
+              const existing = await findExistingBotReply();
+              if (existing) {
                 await github.rest.pulls.deleteReviewComment({
-                  owner, repo, comment_id: botComment.id
+                  owner, repo, comment_id: existing.id
                 });
-                console.log('🗑️ Deleted bot reply — comment is now fully classified.');
+                console.log('🗑️ Bot reply DELETED successfully.');
+              } else {
+                console.log('ℹ️ No bot reply to delete.');
               }
             }
 
-            // ── Helper: Post or Update bot reply ─────────────
+            // ── Post or update bot reply ──────────────────────
             async function postBotReply(message) {
               const existing = await findExistingBotReply();
               if (existing) {
-                // Update existing bot reply instead of posting a new one
                 await github.rest.pulls.updateReviewComment({
                   owner, repo,
                   comment_id: existing.id,
                   body: message
                 });
-                console.log('✏️ Updated existing bot reply.');
+                console.log('✏️ Bot reply UPDATED.');
               } else {
                 await github.rest.pulls.createReplyForReviewComment({
                   owner, repo,
@@ -85,7 +141,7 @@ jobs:
                   comment_id:  commentId,
                   body: message
                 });
-                console.log('💬 Posted new bot reply.');
+                console.log('💬 Bot reply CREATED.');
               }
             }
 
@@ -93,42 +149,46 @@ jobs:
             // CASE 1: No type label at all
             // ════════════════════════════════════════════════
             if (!hasQuestion && !hasDefect) {
+              console.log('→ CASE 1: No type label — posting reminder');
               await postBotReply(
                 `👋 @${reviewer} — please classify this comment by adding a **Type** label at the start:\n\n` +
                 `| Type | Use When |\n|---|---|\n` +
                 `| \`**[QUESTION]**\` | You need clarification or have a question |\n` +
                 `| \`**[DEFECT]**\` | You found an issue in the code |\n\n` +
-                `> 💡 If you select **[DEFECT]**, you must also add one **Ranking** label and one **Classification** label.`
+                `> 💡 If you select **[DEFECT]**, you must also add one **Ranking** label and one **Classification** label.\n\n` +
+                `> ✏️ Please **edit your comment** to add a label — this message will be removed automatically.`
               );
               return;
             }
 
             // ════════════════════════════════════════════════
-            // CASE 2: [QUESTION] — valid, delete any bot reply
+            // CASE 2: [QUESTION] — valid, delete bot reply
             // ════════════════════════════════════════════════
             if (hasQuestion) {
-              const existing = await findExistingBotReply();
-              await deleteBotReply(existing);
-              console.log('✅ QUESTION — fully valid.');
+              console.log('→ CASE 2: QUESTION detected — deleting bot reply if exists');
+              await deleteBotReply();
               return;
             }
 
             // ════════════════════════════════════════════════
-            // CASE 3: [DEFECT] — check Ranking + Classification
+            // CASE 3: [DEFECT] — validate Ranking + Classification
             // ════════════════════════════════════════════════
             if (hasDefect) {
               const missingRanking        = !hasRanking;
               const missingClassification = !hasClassification;
 
-              // Fully classified — delete bot reply if exists
+              console.log('→ CASE 3: DEFECT detected');
+              console.log('  missingRanking       :', missingRanking);
+              console.log('  missingClassification:', missingClassification);
+
+              // Fully classified — delete bot reply
               if (!missingRanking && !missingClassification) {
-                const existing = await findExistingBotReply();
-                await deleteBotReply(existing);
-                console.log('✅ DEFECT fully classified — Ranking ✅ Classification ✅');
+                console.log('→ DEFECT fully classified — deleting bot reply');
+                await deleteBotReply();
                 return;
               }
 
-              // Build reminder only for what is missing
+              // Build reminder for only what is missing
               let reminder = `👋 @${reviewer} — your **[DEFECT]** comment needs more labels:\n\n`;
 
               if (missingRanking) {
@@ -155,7 +215,7 @@ jobs:
                   `| \`🔵 **[EDITORIAL]**\` | Typo, grammar, or formatting |\n\n`;
               }
 
-              reminder += `> ✏️ Please **edit your comment** above to add the missing labels, and this message will be removed automatically.`;
+              reminder += `> ✏️ Please **edit your comment** above to add the missing labels — this message will be removed automatically.`;
 
               await postBotReply(reminder);
             }
