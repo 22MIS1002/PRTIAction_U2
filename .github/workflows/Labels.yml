@@ -43,6 +43,19 @@ jobs:
             console.log("Comment ID :", commentId);
             console.log("Reviewer   :", reviewer);
             console.log("=================================");
+            /*************************************************************
+            * IGNORE REPLY COMMENTS
+            *************************************************************/
+
+            if (comment.in_reply_to_id) {
+
+              console.log(
+                `Reply comment detected (reply to ${comment.in_reply_to_id}). Skipping workflow.`
+              );
+
+              return;
+
+            }
 
             /*************************************************************
              * NORMALIZE MARKDOWN
