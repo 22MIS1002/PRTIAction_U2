@@ -256,8 +256,8 @@ jobs:
 
             | Type | Description |
             |------|-------------|
-            | **[QUESTION]** | Ask for clarification or raise a question |
-            | **[DEFECT]** | Report a defect or issue |
+            | \`**[QUESTION]**\` | Ask for clarification or raise a question |
+            | \`**[DEFECT]**\` | Report a defect or issue |
 
             > **Note**
             >
@@ -275,7 +275,7 @@ jobs:
 
             | Label | Meaning |
             |-------|---------|
-            | 🔴 **[MAJOR]** | Must be fixed before merge |
+            | \`🔴 **[MAJOR]**\` | Must be fixed before merge |
             | 🟡 **[MINOR]** | Small issue with lower impact |
             `;
             }
@@ -283,21 +283,22 @@ jobs:
             function buildClassificationTable() {
             return `## ❌ Classification Missing
 
-            Choose exactly one.
+              Choose exactly one.
 
-            | Label | Meaning |
-            |-------|---------|
-            | **[MISSING]** | Required code is missing |
-            | **[EXTRA/SUPERFLUOUS]** | Unnecessary implementation |
-            | **[AMBIGUOUS]** | Unclear implementation |
-            | **[INCONSISTENT]** | Inconsistent behaviour |
-            | **[IMPROVEMENT DESIRABLE]** | Improvement suggested |
-            | **[NOT CONFORMING TO STANDARDS]** | Coding standard violation |
-            | **[RISK-PRONE]** | Risky implementation |
-            | **[FACTUALLY INCORRECT]** | Incorrect behaviour |
-            | **[NOT IMPLEMENTABLE]** | Suggestion cannot be implemented |
-            | **[EDITORIAL]** | Grammar / formatting issue |
-            `;
+              | Label | Meaning |
+              |------|---------|
+              | \`**[MISSING]**\` | Required code is missing |
+              | \`**[EXTRA/SUPERFLUOUS]**\` | Unnecessary implementation |
+              | \`**[AMBIGUOUS]**\` | Unclear implementation |
+              | \`**[INCONSISTENT]**\` | Inconsistent behaviour |
+              | \`**[IMPROVEMENT DESIRABLE]**\` | Improvement suggested |
+              | \`**[NOT CONFORMING TO STANDARDS]**\` | Coding standard violation |
+              | \`**[RISK-PRONE]**\` | Risky implementation |
+              | \`**[FACTUALLY INCORRECT]**\` | Incorrect behaviour |
+              | \`**[NOT IMPLEMENTABLE]**\` | Suggestion cannot be implemented |
+              | \`**[EDITORIAL]**\` | Grammar / formatting issue |
+
+              `;
             }
 
             function buildReminderHeader() {
