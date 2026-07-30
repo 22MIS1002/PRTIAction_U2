@@ -459,24 +459,24 @@ jobs:
             function buildTypeTable() {
 
               return `
-            👋 @${reviewer}
+              👋 @${reviewer}
 
-            Your review comment has not been classified yet.
+              Your review comment has not been classified yet.
 
-            Please begin your review comment with **ONE** of the following labels.
+              Please begin your review comment with **ONE** of the following labels.
 
-            | Type | Description |
-            |------|-------------|
-            | **[QUESTION]** | Ask for clarification or raise a question |
-            | **[DEFECT]** | Report a defect or issue |
+              | Type | Description |
+              |------|-------------|
+              | **[QUESTION]** | Ask for clarification or raise a question |
+              | **[DEFECT]** | Report a defect or issue |
 
-            > **Note**
-            >
-            > If you choose **[DEFECT]**, you must also provide:
-            >
-            > - One **Ranking**
-            > - One **Classification**
-            `;
+              > **Note**
+              >
+              > If you choose **[DEFECT]**, you must also provide:
+              >
+              > - One **Ranking**
+              > - One **Classification**
+              `;
 
             }
 
@@ -487,16 +487,16 @@ jobs:
             function buildRankingTable() {
 
               return `
-              ## ❌ Ranking Required
+                ## ❌ Ranking Required
 
-              Please select **ONE** Ranking.
+                Please select **ONE** Ranking.
 
-              | Ranking | Meaning |
-              |---------|---------|
-              | 🔴 **[MAJOR]** | Significant issue that should be resolved before merge |
-              | 🟡 **[MINOR]** | Small issue with lower impact |
+                | Ranking | Meaning |
+                |---------|---------|
+                | 🔴 **[MAJOR]** | Significant issue that should be resolved before merge |
+                | 🟡 **[MINOR]** | Small issue with lower impact |
 
-              `;
+                `;
 
             }
 
@@ -507,24 +507,24 @@ jobs:
             function buildClassificationTable() {
 
               return `
-              ## ❌ Classification Required
+                ## ❌ Classification Required
 
-              Please select **ONE** Classification.
+                Please select **ONE** Classification.
 
-              | Classification | Description |
-              |---------------|-------------|
-              | **[MISSING]** | Required code or behaviour is missing |
-              | **[EXTRA/SUPERFLUOUS]** | Unnecessary implementation exists |
-              | **[AMBIGUOUS]** | Behaviour or implementation is unclear |
-              | **[INCONSISTENT]** | Inconsistent with surrounding code |
-              | **[IMPROVEMENT DESIRABLE]** | Improvement suggested |
-              | **[NOT CONFORMING TO STANDARDS]** | Coding standards not followed |
-              | **[RISK-PRONE]** | Risky implementation |
-              | **[FACTUALLY INCORRECT]** | Incorrect behaviour |
-              | **[NOT IMPLEMENTABLE]** | Suggested implementation is not feasible |
-              | **[EDITORIAL]** | Grammar, wording or formatting issue |
+                | Classification | Description |
+                |---------------|-------------|
+                | **[MISSING]** | Required code or behaviour is missing |
+                | **[EXTRA/SUPERFLUOUS]** | Unnecessary implementation exists |
+                | **[AMBIGUOUS]** | Behaviour or implementation is unclear |
+                | **[INCONSISTENT]** | Inconsistent with surrounding code |
+                | **[IMPROVEMENT DESIRABLE]** | Improvement suggested |
+                | **[NOT CONFORMING TO STANDARDS]** | Coding standards not followed |
+                | **[RISK-PRONE]** | Risky implementation |
+                | **[FACTUALLY INCORRECT]** | Incorrect behaviour |
+                | **[NOT IMPLEMENTABLE]** | Suggested implementation is not feasible |
+                | **[EDITORIAL]** | Grammar, wording or formatting issue |
 
-              `;
+                `;
 
             }
 
