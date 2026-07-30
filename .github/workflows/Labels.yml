@@ -230,7 +230,8 @@ jobs:
               }
 
               if(existingReply){
-                if(existingReply.body.includes(reminder)){
+                const newBody = `${marker}\n${reminder}`;
+                if (existingReply.body === newBody) {
                   console.log("Reminder already up-to-date.");
                   return;
                 }
@@ -248,83 +249,84 @@ jobs:
              *************************************************************/
 
             function buildTypeTable() {
-            return `👋 @${reviewer}
-
-            Your review comment has not been classified yet.
-
-            Please begin your review comment with **ONE** of the following labels.
-
-            | Type | Description |
-            |------|-------------|
-            | \`**[QUESTION]**\` | Ask for clarification or raise a question |
-            | \`**[DEFECT]**\` | Report a defect or issue |
-
-            > **Note**
-            >
-            > If you choose **[DEFECT]**, you must also provide:
-            >
-            > - One **Ranking**
-            > - One **Classification**
-            `;
+              return [
+                `👋 @${reviewer}`,
+                "",
+                "Your review comment has not been classified yet.",
+                "",
+                "Please begin your review comment with **ONE** of the following labels.",
+                "",
+                "| Type | Description |",
+                "|------|-------------|",
+                "| `[QUESTION]` | Ask for clarification or raise a question |",
+                "| `[DEFECT]` | Report a defect or issue |",
+                "",
+                "> **Note**",
+                ">",
+                "> If you choose **[DEFECT]**, you must also provide:",
+                ">",
+                "> - One **Ranking**",
+                "> - One **Classification**"
+              ].join("\n");
             }
 
             function buildRankingTable() {
-            return `
-            ## ❌ Ranking Required
-
-            Choose exactly one.
-
-            | Label | Meaning |
-            |-------|---------|
-            | \`🔴 **[MAJOR]**\` | Must be fixed before merge |
-            | 🟡 **[MINOR]** | Small issue with lower impact |
-            `;
+              return [
+                "## ❌ Ranking Required",
+                "",
+                "Choose exactly one.",
+                "",
+                "| Label | Meaning |",
+                "|-------|---------|",
+                "| `🔴 [MAJOR]` | Must be fixed before merge |",
+                "| `🟡 [MINOR]` | Small issue with lower impact |"
+              ].join("\n");
             }
 
             function buildClassificationTable() {
-            return `
-            ## ❌ Classification Missing
-
-            Choose exactly one.
-
-            | Label | Meaning |
-            |------|---------|
-            | \`**[MISSING]**\` | Required code is missing |
-            | \`**[EXTRA/SUPERFLUOUS]**\` | Unnecessary implementation |
-            | \`**[AMBIGUOUS]**\` | Unclear implementation |
-            | \`**[INCONSISTENT]**\` | Inconsistent behaviour |
-            | \`**[IMPROVEMENT DESIRABLE]**\` | Improvement suggested |
-            | \`**[NOT CONFORMING TO STANDARDS]**\` | Coding standard violation |
-            | \`**[RISK-PRONE]**\` | Risky implementation |
-            | \`**[FACTUALLY INCORRECT]**\` | Incorrect behaviour |
-            | \`**[NOT IMPLEMENTABLE]**\` | Suggestion cannot be implemented |
-            | \`**[EDITORIAL]**\` | Grammar / formatting issue |
-
-            `;
+              return [
+                "## ❌ Classification Required",
+                "",
+                "Choose exactly one.",
+                "",
+                "| Label | Meaning |",
+                "|------|---------|",
+                "| `[MISSING]` | Required code is missing |",
+                "| `[EXTRA/SUPERFLUOUS]` | Unnecessary implementation |",
+                "| `[AMBIGUOUS]` | Unclear implementation |",
+                "| `[INCONSISTENT]` | Inconsistent behaviour |",
+                "| `[IMPROVEMENT DESIRABLE]` | Improvement suggested |",
+                "| `[NOT CONFORMING TO STANDARDS]` | Coding standard violation |",
+                "| `[RISK-PRONE]` | Risky implementation |",
+                "| `[FACTUALLY INCORRECT]` | Incorrect behaviour |",
+                "| `[NOT IMPLEMENTABLE]` | Suggestion cannot be implemented |",
+                "| `[EDITORIAL]` | Grammar / formatting issue |"
+              ].join("\n");
             }
 
             function buildReminderHeader() {
-            return `👋 @${reviewer}
-
-            Your **[DEFECT]** review comment is not fully classified.
-
-            `;
+              return [
+                `👋 @${reviewer}`,
+                "",
+                "Your **[DEFECT]** review comment is not fully classified."
+              ].join("\n");
             }
 
-            function buildFooter(state){
-            return `
-            ---
-
-            ### Current Status
-
-            | Requirement | Status |
-            |-------------|--------|
-            | Type | ✅ ${state.type} |
-            | Ranking | ${state.ranking ? "✅ " + state.ranking : "❌ Missing"} |
-            | Classification | ${state.classification ? "✅ " + state.classification : "❌ Missing"} |
-
-            _Edit your review comment. This reminder will update automatically after every edit._
-            `;
+            function buildFooter(state) {
+              return [
+                "",
+                "---",
+                "",
+                "### Current Status",
+                "",
+                "| Requirement | Status |",
+                "|-------------|--------|",
+                `| Type | ✅ ${state.type} |`,
+                `| Ranking | ${state.ranking ? "✅ " + state.ranking : "❌ Missing"} |`,
+                `| Classification | ${state.classification ? "✅ " + state.classification : "❌ Missing"} |`,
+                "",
+                "_Edit your review comment. This reminder will update automatically after every edit._"
+              ].join("\n");
             }
 
             /*************************************************************
