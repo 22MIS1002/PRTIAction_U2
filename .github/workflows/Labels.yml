@@ -1,20 +1,31 @@
 name: PR Review Comment Classifier
-'on':
+
+on:
   pull_request_review_comment:
     types:
       - created
       - edited
+
 permissions:
   pull-requests: write
+
 jobs:
   review-comment-classifier:
+
     if: github.event.comment.user.login != 'github-actions[bot]'
+
     runs-on: ubuntu-latest
+
     steps:
+
       - name: Validate Review Comment
+
         uses: actions/github-script@v7
+
         with:
+
           github-token: ${{ secrets.GITHUB_TOKEN }}
+
           script: |
 
             /*************************************************************
@@ -43,14 +54,15 @@ jobs:
             console.log("Comment ID :", commentId);
             console.log("Reviewer   :", reviewer);
             console.log("=================================");
-            /*************************************************************
-            * IGNORE REPLY COMMENTS
-            *************************************************************/
 
-            if (comment.in_reply_to_id) {
+            /*************************************************************
+             * IGNORE REPLY COMMENTS
+             *************************************************************/
+
+            if (comment.in_reply_to_id != null) {
 
               console.log(
-                `Reply comment detected (reply to ${comment.in_reply_to_id}). Skipping workflow.`
+                `Reply detected (reply to ${comment.in_reply_to_id}). Workflow skipped.`
               );
 
               return;
@@ -59,34 +71,28 @@ jobs:
 
             /*************************************************************
              * NORMALIZE MARKDOWN
-             *
-             * GitHub Saved Replies may contain:
-             * **bold**
-             * > quote
-             * - bullets
-             * # headings
-             * `code`
              *************************************************************/
 
             function normalizeComment(text){
 
               return text
 
-                // remove html
-                .replace(/<[^>]*>/g," ")
+                // Remove HTML tags
+                .replace(/<[^>]*>/g, " ")
 
-                // remove markdown
-                .replace(/[*_`>#-]/g," ")
+                // Remove Markdown formatting
+                .replace(/[*_`>#-]/g, " ")
 
-                // remove CR
-                .replace(/\r/g," ")
+                // Remove carriage returns
+                .replace(/\r/g, " ")
 
-                // remove new lines
-                .replace(/\n/g," ")
+                // Remove new lines
+                .replace(/\n/g, " ")
 
-                // collapse whitespace
-                .replace(/\s+/g," ")
+                // Collapse whitespace
+                .replace(/\s+/g, " ")
 
+                // Convert to uppercase
                 .toUpperCase()
 
                 .trim();
@@ -96,15 +102,17 @@ jobs:
             const normalized =
               normalizeComment(rawBody);
 
+            console.log("Normalized Comment:");
             console.log(normalized);
 
             /*************************************************************
-             * LABELS
+             * LABEL DEFINITIONS
              *************************************************************/
 
             const RANKING = [
 
               "MAJOR",
+
               "MINOR"
 
             ];
@@ -112,20 +120,29 @@ jobs:
             const CLASSIFICATIONS = [
 
               "MISSING",
+
               "EXTRA/SUPERFLUOUS",
+
               "AMBIGUOUS",
+
               "INCONSISTENT",
+
               "IMPROVEMENT DESIRABLE",
+
               "NOT CONFORMING TO STANDARDS",
+
               "RISK-PRONE",
+
               "FACTUALLY INCORRECT",
+
               "NOT IMPLEMENTABLE",
+
               "EDITORIAL"
 
             ];
 
             /*************************************************************
-             * EXTRACT STATE
+             * EXTRACT REVIEW STATE
              *************************************************************/
 
             function extractState(text){
@@ -163,7 +180,7 @@ jobs:
               for(const ranking of RANKING){
 
                 const regex =
-                  new RegExp("\\[" + ranking + "\\]","i");
+                  new RegExp("\\[" + ranking + "\\]", "i");
 
                 if(regex.test(text)){
 
@@ -182,15 +199,14 @@ jobs:
               for(const classification of CLASSIFICATIONS){
 
                 const escaped =
-                  classification.replace("/","\\/");
+                  classification.replace("/", "\\/");
 
                 const regex =
-                  new RegExp("\\[" + escaped + "\\]","i");
+                  new RegExp("\\[" + escaped + "\\]", "i");
 
                 if(regex.test(text)){
 
-                  state.classification =
-                    classification;
+                  state.classification = classification;
 
                   break;
 
@@ -205,25 +221,24 @@ jobs:
             const state =
               extractState(normalized);
 
-            console.log("STATE");
-
-            console.log(JSON.stringify(state,null,2));
-
-            /*************************************************************
+            console.log("Detected State:");
+            console.log(JSON.stringify(state, null, 2));
+                        /*************************************************************
              * UNIQUE MARKER
              *************************************************************/
 
             const marker =
               `<!-- review-classifier:${commentId} -->`;
-                          /*************************************************************
+
+            /*************************************************************
              * BOT REPLY MANAGER
              *************************************************************/
 
             /**
-             * Find existing bot reply for this review comment.
-             * Uses the hidden marker instead of in_reply_to_id because
-             * GitHub does not reliably preserve reply relationships.
+             * Finds the existing bot reminder associated with
+             * this review comment.
              */
+
             async function findBotReply() {
 
               let page = 1;
@@ -236,26 +251,29 @@ jobs:
                     owner,
                     repo,
                     pull_number: pullNumber,
+
                     per_page: 100,
+
                     page
 
                   });
 
-                const botReply = response.data.find(c =>
+                const existingReply =
+                  response.data.find(reply =>
 
-                  c.user.login === "github-actions[bot]" &&
-                  c.body &&
-                  c.body.includes(marker)
+                    reply.user.login === "github-actions[bot]" &&
+                    reply.body &&
+                    reply.body.includes(marker)
 
-                );
-
-                if (botReply) {
-
-                  console.log(
-                    `Found bot reply ${botReply.id}`
                   );
 
-                  return botReply;
+                if (existingReply) {
+
+                  console.log(
+                    `Existing bot reply found (${existingReply.id})`
+                  );
+
+                  return existingReply;
 
                 }
 
@@ -269,53 +287,53 @@ jobs:
 
               }
 
-              console.log("No existing bot reply.");
+              console.log("No existing bot reply found.");
 
               return null;
 
             }
 
             /*************************************************************
-             * CREATE REPLY
+             * CREATE BOT REPLY
              *************************************************************/
 
             async function createReply(message){
 
-              console.log("Creating bot reply...");
+              console.log("Creating bot reminder...");
 
               await github.rest.pulls.createReplyForReviewComment({
 
                 owner,
                 repo,
+
                 pull_number: pullNumber,
 
                 comment_id: commentId,
 
                 body:
 
-                `${marker}
+              `${marker}
 
-                ${message}`
+              ${message}`
 
               });
 
             }
 
             /*************************************************************
-             * UPDATE REPLY
+             * UPDATE BOT REPLY
              *************************************************************/
 
             async function updateReply(
 
               replyId,
+
               message
 
             ){
 
               console.log(
-
-                `Updating bot reply ${replyId}`
-
+                `Updating bot reminder ${replyId}`
               );
 
               await github.rest.pulls.updateReviewComment({
@@ -336,15 +354,13 @@ jobs:
             }
 
             /*************************************************************
-             * DELETE REPLY
+             * DELETE BOT REPLY
              *************************************************************/
 
             async function deleteReply(replyId){
 
               console.log(
-
-                `Deleting bot reply ${replyId}`
-
+                `Deleting bot reminder ${replyId}`
               );
 
               await github.rest.pulls.deleteReviewComment({
@@ -361,31 +377,31 @@ jobs:
             /*************************************************************
              * SYNCHRONIZE BOT REPLY
              *
-             * message == ""
-             *     delete reminder
+             * Empty reminder
+             *      -> Delete reminder
              *
-             * message != ""
-             *     update reminder
-             *     create reminder if missing
+             * Non-empty reminder
+             *      -> Update existing reminder
+             *      -> Create reminder if none exists
              *************************************************************/
 
             async function syncBotReply(message){
 
-              const existing =
-                await findBotReply();
-
-              const trimmed =
+              const reminder =
                 message.trim();
 
+              const existingReply =
+                await findBotReply();
+
               /*
-               * No reminder needed
+               * No reminder required
                */
 
-              if(trimmed.length === 0){
+              if(reminder.length === 0){
 
-                if(existing){
+                if(existingReply){
 
-                  await deleteReply(existing.id);
+                  await deleteReply(existingReply.id);
 
                 }
 
@@ -394,12 +410,12 @@ jobs:
               }
 
               /*
-               * Update reminder
+               * Reminder already exists
                */
 
-              if(existing){
+              if(existingReply){
 
-                if(existing.body.includes(trimmed)){
+                if(existingReply.body.includes(reminder)){
 
                   console.log(
                     "Reminder already up-to-date."
@@ -411,9 +427,9 @@ jobs:
 
                 await updateReply(
 
-                  existing.id,
+                  existingReply.id,
 
-                  trimmed
+                  reminder
 
                 );
 
@@ -422,10 +438,10 @@ jobs:
               }
 
               /*
-               * Create reminder
+               * Create new reminder
                */
 
-              await createReply(trimmed);
+              await createReply(reminder);
 
             }
 
@@ -433,42 +449,133 @@ jobs:
               "Bot Reply Manager initialized."
             );
                         /*************************************************************
+             * UI BUILDERS
+             *************************************************************/
+
+            /**
+             * TYPE TABLE
+             */
+
+            function buildTypeTable() {
+
+              return `
+            👋 @${reviewer}
+
+            Your review comment has not been classified yet.
+
+            Please begin your review comment with **ONE** of the following labels.
+
+            | Type | Description |
+            |------|-------------|
+            | **[QUESTION]** | Ask for clarification or raise a question |
+            | **[DEFECT]** | Report a defect or issue |
+
+            > **Note**
+            >
+            > If you choose **[DEFECT]**, you must also provide:
+            >
+            > - One **Ranking**
+            > - One **Classification**
+            `;
+
+            }
+
+            /**
+             * RANKING TABLE
+             */
+
+            function buildRankingTable() {
+
+              return `
+              ## ❌ Ranking Required
+
+              Please select **ONE** Ranking.
+
+              | Ranking | Meaning |
+              |---------|---------|
+              | 🔴 **[MAJOR]** | Significant issue that should be resolved before merge |
+              | 🟡 **[MINOR]** | Small issue with lower impact |
+
+              `;
+
+            }
+
+            /**
+             * CLASSIFICATION TABLE
+             */
+
+            function buildClassificationTable() {
+
+              return `
+              ## ❌ Classification Required
+
+              Please select **ONE** Classification.
+
+              | Classification | Description |
+              |---------------|-------------|
+              | **[MISSING]** | Required code or behaviour is missing |
+              | **[EXTRA/SUPERFLUOUS]** | Unnecessary implementation exists |
+              | **[AMBIGUOUS]** | Behaviour or implementation is unclear |
+              | **[INCONSISTENT]** | Inconsistent with surrounding code |
+              | **[IMPROVEMENT DESIRABLE]** | Improvement suggested |
+              | **[NOT CONFORMING TO STANDARDS]** | Coding standards not followed |
+              | **[RISK-PRONE]** | Risky implementation |
+              | **[FACTUALLY INCORRECT]** | Incorrect behaviour |
+              | **[NOT IMPLEMENTABLE]** | Suggested implementation is not feasible |
+              | **[EDITORIAL]** | Grammar, wording or formatting issue |
+
+              `;
+
+            }
+
+            /**
+             * HEADER FOR DEFECT REMINDER
+             */
+
+            function buildReminderHeader() {
+
+              return `
+            👋 @${reviewer}
+
+            Your **[DEFECT]** review comment requires additional information.
+
+            `;
+
+            }
+
+            /**
+             * FOOTER
+             */
+
+            function buildFooter(state){
+
+              return `
+            ---
+
+            ### Current Status
+
+            | Requirement | Status |
+            |-------------|--------|
+            | Type | ✅ ${state.type} |
+            | Ranking | ${state.ranking ? "✅ " + state.ranking : "❌ Missing"} |
+            | Classification | ${state.classification ? "✅ " + state.classification : "❌ Missing"} |
+
+            `;
+            }
+                        /*************************************************************
              * BUILD DYNAMIC REMINDER
              *************************************************************/
 
             function buildReminder(state){
 
-              /*
-               * Empty reminder means
-               * the comment is valid.
-               */
-
-              let reminder = "";
-
               /*******************************************************
                * CASE 1
-               * No Type
+               * No Type Selected
                *******************************************************/
 
               if(state.type === null){
 
-                reminder =
-              `👋 @${reviewer}
-
-              Your review comment is missing a **Type**.
-
-              Please add ONE of the following labels at the beginning of your review comment.
-
-              | Type | Description |
-              |------|-------------|
-              | \`**[QUESTION]**\` | Ask for clarification |
-              | \`**[DEFECT]**\` | Report an issue |
-
-              > If you choose **[DEFECT]**, you must also provide one Ranking and one Classification.
-
-              _Edit your review comment. This reminder will update automatically._`;
-
-                return reminder;
+                return buildTypeTable();
 
               }
 
@@ -480,7 +587,8 @@ jobs:
               if(state.type === "QUESTION"){
 
                 /*
-                 * QUESTION requires nothing else.
+                 * Questions require no additional labels.
+                 * Delete any existing reminder.
                  */
 
                 return "";
@@ -489,141 +597,62 @@ jobs:
 
               /*******************************************************
                * CASE 3
-               * DEFECT
+               * DEFECT COMPLETE
                *******************************************************/
-
-              reminder =
-              `👋 @${reviewer}
-
-              Your **[DEFECT]** review comment is not fully classified.
-
-              `;
-
-              /*******************************************************
-               * Missing Ranking
-               *******************************************************/
-
-              if(state.ranking === null){
-
-                reminder +=
-              `
-              ## ❌ Ranking Missing
-
-              Choose exactly one.
-
-              | Label | Meaning |
-              |------|---------|
-              | \`🔴 **[MAJOR]**\` | Must be fixed before merge |
-              | \`🟡 **[MINOR]**\` | Small issue with lower impact |
-
-              `;
-
-              }
-
-              /*******************************************************
-               * Missing Classification
-               *******************************************************/
-
-              if(state.classification === null){
-
-                reminder +=
-                `
-                ## ❌ Classification Missing
-
-                Choose exactly one.
-
-                | Label | Meaning |
-                |------|---------|
-                | \`**[MISSING]**\` | Required code is missing |
-                | \`**[EXTRA/SUPERFLUOUS]**\` | Unnecessary implementation |
-                | \`**[AMBIGUOUS]**\` | Unclear implementation |
-                | \`**[INCONSISTENT]**\` | Inconsistent behaviour |
-                | \`**[IMPROVEMENT DESIRABLE]**\` | Improvement suggested |
-                | \`**[NOT CONFORMING TO STANDARDS]**\` | Coding standard violation |
-                | \`**[RISK-PRONE]**\` | Risky implementation |
-                | \`**[FACTUALLY INCORRECT]**\` | Incorrect behaviour |
-                | \`**[NOT IMPLEMENTABLE]**\` | Suggestion cannot be implemented |
-                | \`**[EDITORIAL]**\` | Grammar / formatting issue |
-
-                `;
-
-              }
-
-              /*******************************************************
-               * Footer
-               *******************************************************/
-
-              reminder +=
-              `
-                ---
-
-                ### Current Status
-
-                | Requirement | Status |
-                |------------|--------|
-                | Type | ✅ ${state.type} |
-                | Ranking | ${state.ranking ? "✅ " + state.ranking : "❌ Missing"} |
-                | Classification | ${state.classification ? "✅ " + state.classification : "❌ Missing"} |
-
-                _Edit your review comment. This reminder will update automatically after every edit._`;
-
-              /*
-               * DEFECT complete
-               */
 
               if(
+                state.type === "DEFECT" &&
                 state.ranking !== null &&
                 state.classification !== null
               ){
+
+                /*
+                 * Fully classified.
+                 * Delete any existing reminder.
+                 */
 
                 return "";
 
               }
 
+              /*******************************************************
+               * CASE 4
+               * DEFECT
+               *******************************************************/
+
+              let reminder =
+                buildReminderHeader();
+
+              /*
+               * Missing Ranking
+               */
+
+              if(state.ranking === null){
+
+                reminder +=
+                  buildRankingTable();
+
+              }
+
+              /*
+               * Missing Classification
+               */
+
+              if(state.classification === null){
+
+                reminder +=
+                  buildClassificationTable();
+
+              }
+
+              /*
+               * Current Status
+               */
+
+              reminder +=
+                buildFooter(state);
+
               return reminder;
 
             }
 
-            /*************************************************************
-             * GENERATE REMINDER
-             *************************************************************/
-
-            const reminder =
-              buildReminder(state);
-
-            console.log("Generated Reminder:");
-
-            console.log(reminder);
-                        /*************************************************************
-             * SYNCHRONIZE BOT REPLY
-             *************************************************************/
-
-            console.log("======================================");
-            console.log("Current State");
-            console.log(JSON.stringify(state, null, 2));
-            console.log("======================================");
-
-            if (reminder === "") {
-
-              console.log("Comment is fully valid.");
-
-            } else {
-
-              console.log("Reminder required.");
-
-            }
-
-            /*
-             * This single function handles everything:
-             *
-             * reminder == ""
-             *     -> delete existing reminder
-             *
-             * reminder != ""
-             *     -> update reminder
-             *     -> create reminder if none exists
-             */
-
-            await syncBotReply(reminder);
-
-            console.log("Workflow completed successfully.");
