@@ -1,39 +1,30 @@
 name: PR Review Comment Classifier
-
 on:
   pull_request_review_comment:
     types:
       - created
       - edited
-
 permissions:
   pull-requests: write
-
 jobs:
   review-comment-classifier:
-
     if: github.event.comment.user.login != 'github-actions[bot]'
-
     runs-on: ubuntu-latest
-
     steps:
-
       - name: Validate Review Comment
-
         uses: actions/github-script@v7
-
         with:
-
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-          script: |
-
+          script: >
+            
             /*************************************************************
              * CONTEXT
              *************************************************************/
 
             const owner = context.repo.owner;
+
             const repo = context.repo.repo;
+
 
             const pullNumber =
               context.payload.pull_request.number;
@@ -51,9 +42,13 @@ jobs:
               comment.body || "";
 
             console.log("=================================");
+
             console.log("Comment ID :", commentId);
+
             console.log("Reviewer   :", reviewer);
+
             console.log("=================================");
+
 
             /*************************************************************
              * IGNORE REPLY COMMENTS
@@ -68,6 +63,7 @@ jobs:
               return;
 
             }
+
 
             /*************************************************************
              * NORMALIZE MARKDOWN
@@ -99,11 +95,14 @@ jobs:
 
             }
 
+
             const normalized =
               normalizeComment(rawBody);
 
             console.log("Normalized Comment:");
+
             console.log(normalized);
+
 
             /*************************************************************
              * LABEL DEFINITIONS
@@ -116,6 +115,7 @@ jobs:
               "MINOR"
 
             ];
+
 
             const CLASSIFICATIONS = [
 
@@ -140,6 +140,7 @@ jobs:
               "EDITORIAL"
 
             ];
+
 
             /*************************************************************
              * EXTRACT REVIEW STATE
@@ -218,10 +219,12 @@ jobs:
 
             }
 
+
             const state =
               extractState(normalized);
 
             console.log("Detected State:");
+
             console.log(JSON.stringify(state, null, 2));
                         /*************************************************************
              * UNIQUE MARKER
@@ -293,6 +296,7 @@ jobs:
 
             }
 
+
             /*************************************************************
              * CREATE BOT REPLY
              *************************************************************/
@@ -319,6 +323,7 @@ jobs:
               });
 
             }
+
 
             /*************************************************************
              * UPDATE BOT REPLY
@@ -353,6 +358,7 @@ jobs:
 
             }
 
+
             /*************************************************************
              * DELETE BOT REPLY
              *************************************************************/
@@ -373,6 +379,7 @@ jobs:
               });
 
             }
+
 
             /*************************************************************
              * SYNCHRONIZE BOT REPLY
@@ -445,6 +452,7 @@ jobs:
 
             }
 
+
             console.log(
               "Bot Reply Manager initialized."
             );
@@ -480,6 +488,7 @@ jobs:
 
             }
 
+
             /**
              * RANKING TABLE
              */
@@ -499,6 +508,7 @@ jobs:
                 `;
 
             }
+
 
             /**
              * CLASSIFICATION TABLE
@@ -528,6 +538,7 @@ jobs:
 
             }
 
+
             /**
              * HEADER FOR DEFECT REMINDER
              */
@@ -537,11 +548,15 @@ jobs:
               return `
             👋 @${reviewer}
 
+
             Your **[DEFECT]** review comment requires additional information.
+
 
             `;
 
+
             }
+
 
             /**
              * FOOTER
@@ -552,15 +567,24 @@ jobs:
               return `
             ---
 
+
             ### Current Status
 
+
             | Requirement | Status |
+
             |-------------|--------|
+
             | Type | ✅ ${state.type} |
+
             | Ranking | ${state.ranking ? "✅ " + state.ranking : "❌ Missing"} |
-            | Classification | ${state.classification ? "✅ " + state.classification : "❌ Missing"} |
+
+            | Classification | ${state.classification ? "✅ " +
+            state.classification : "❌ Missing"} |
+
 
             `;
+
             }
                         /*************************************************************
              * BUILD DYNAMIC REMINDER
@@ -655,4 +679,3 @@ jobs:
               return reminder;
 
             }
-
