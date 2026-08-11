@@ -1,23 +1,41 @@
 name: PRTI Enforcement
-
-on:
+'on':
+  workflow_dispatch:
+      inputs:
+        pr_number:
+          description: "Pull Request Number"
+          required: true
+          
   pull_request:
-    types: [opened, edited, reopened, synchronize]
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - ready_for_review
+    branches:
+      - develop
+      - release/**
   issue_comment:
-    types: [created, edited, deleted]
-
+    types:
+      - created
+      - edited
+      - deleted
 permissions:
+  contents: read
   pull-requests: write
   issues: write
   statuses: write
-
+concurrency:
+  group: prti-enforcement-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
 jobs:
   prti-check:
-    if: >-
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request)
-    runs-on: ubuntu-latest
-
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
+    runs-on:
+      group: xpf-runners
+      labels: [self-hosted, Linux, x64]
+    timeout-minutes: 10
     steps:
       - name: Validate PRTI data & Review attachment, update sticky comment, set commit status
         uses: actions/github-script@v7
@@ -28,24 +46,75 @@ jobs:
             const STATUS_CONTEXT = 'prti-check';
             const { owner, repo } = context.repo;
 
-            // Prevent infinite loop if comment is created/edited by GitHub Actions bot
-            if (context.eventName === 'issue_comment' && context.payload.comment && context.payload.comment.user.login === 'github-actions[bot]') {
-              core.info('Comment action by GitHub Actions bot. Skipping execution.');
-              return;
+            // Loop guard: skip only when the BOT edits/creates its OWN sticky comment.
+            // A 'deleted' event must still run so the sticky comment can be recreated.
+            if (context.eventName === 'issue_comment' && context.payload.comment) {
+              const c = context.payload.comment;
+              const senderLogin = context.payload.sender ? context.payload.sender.login : '';
+              const isBotSender = senderLogin === 'github-actions[bot]';
+              const isStickyComment = (c.body || '').includes(MARKER);
+              const isInvalidationEdit = (c.body || '').includes(INVALIDATED_FLAG);
+
+              // 'deleted' must always run so a removed sticky comment can be recreated.
+              if (isBotSender && (isStickyComment || isInvalidationEdit) && context.payload.action !== 'deleted') {
+                core.info('Sticky comment written by this workflow. Skipping to avoid a loop.');
+                return;
+              }
             }
 
-            const prNumber = context.eventName === 'issue_comment'
-              ? context.payload.issue.number
-              : context.payload.pull_request.number;
+            let prNumber;
+
+            if (context.eventName === 'workflow_dispatch') {
+              prNumber = Number(core.getInput('pr_number'));
+            } else if (context.eventName === 'issue_comment') {
+              prNumber = context.payload.issue.number;
+            } else {
+              prNumber = context.payload.pull_request.number;
+            }
 
             const { data: pr } = await github.rest.pulls.get({
               owner, repo, pull_number: prNumber
             });
 
+            // Scope: enforce only on PRs targeting 'develop' or any 'release/**' branch.
+            // This MUST mirror the `on: pull_request: branches:` filter above, otherwise
+            // an in-scope PR would trigger the workflow but never receive a commit status
+            // and would hang forever on the required check.
+            // Re-checked here because issue_comment events are NOT branch-filterable by YAML.
+            const baseRef = pr.base.ref;
+            if (baseRef !== 'develop' && !baseRef.startsWith('release/')) {
+              core.info(`Base branch '${baseRef}' is out of scope for PRTI enforcement. Skipping.`);
+              return;
+            }
+
+            // Skip bot-authored PRs (dependabot, github-actions, Copilot, SVN sync automation, etc.).
+            // Bots cannot supply PRTI data or a review .md file, so enforcing would block them forever.
+            // A 'success' status IS written (rather than simply returning) so that the required
+            // check is satisfied instead of being left permanently in "Expected — waiting for status".
+            const prAuthor = pr.user ? pr.user.login : '';
+            const prAuthorType = pr.user ? pr.user.type : '';
+            // Add non-'Bot'-typed service/machine accounts (e.g. PAT-backed automation users) here.
+            const BOT_ALLOWLIST = [
+              'dependabot[bot]',
+              'github-actions[bot]',
+              'copilot-swe-agent[bot]'
+            ];
+
+            if (prAuthorType === 'Bot' || prAuthor.endsWith('[bot]') || BOT_ALLOWLIST.includes(prAuthor)) {
+              core.info(`PR authored by bot '${prAuthor}'. Skipping PRTI enforcement and auto-passing the check.`);
+              await github.rest.repos.createCommitStatus({
+                owner, repo, sha: pr.head.sha,
+                context: STATUS_CONTEXT,
+                state: 'success',
+                description: 'PRTI enforcement skipped for bot-authored PR',
+                target_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`
+              });
+              return;
+            }
+
             const headSha = pr.head.sha;
             const author = pr.user ? pr.user.login : 'there';
 
-            // Fetch current active comments on the PR (if a comment was deleted, listComments won't return it)
             let comments = await github.paginate(
               github.rest.issues.listComments,
               { owner, repo, issue_number: prNumber, per_page: 100 }
@@ -57,12 +126,12 @@ jobs:
             // 1. Label older PRTI comments as INVALIDATED on new commits
             if (isSynchronize) {
               core.info('New commit(s) pushed. Marking previous PRTI comments as invalidated...');
-              const prtiCommentsToInvalidate = comments.filter(c => 
-                c.user && 
-                c.user.login === author && 
-                !c.body.includes(MARKER) && 
-                !c.body.includes(INVALIDATED_FLAG) &&
-                prtiRegex.test(c.body)
+              const prtiCommentsToInvalidate = comments.filter(c =>
+                c.user &&
+                c.user.login === author &&
+                !(c.body || '').includes(MARKER) &&
+                !(c.body || '').includes(INVALIDATED_FLAG) &&
+                prtiRegex.test(c.body || '')
               );
 
               for (const comment of prtiCommentsToInvalidate) {
@@ -78,44 +147,37 @@ jobs:
                   ''
                 ].join('\n');
 
-                const updatedBody = redWarningBanner + comment.body;
-
                 await github.rest.issues.updateComment({
-                  owner, repo, comment_id: comment.id, body: updatedBody
+                  owner, repo, comment_id: comment.id, body: redWarningBanner + comment.body
                 });
                 core.info(`Marked comment ID: ${comment.id} as invalidated.`);
               }
 
-              // Re-fetch comments to ensure local state reflects edits
               comments = await github.paginate(
                 github.rest.issues.listComments,
                 { owner, repo, issue_number: prNumber, per_page: 100 }
               );
             }
 
-            // 2. Scan PR Description & active author comments (ignoring sticky comment & invalidated comments)
+            // 2. Scan PR description & active author comments
             const activeAuthorComments = comments
               .filter(c => c.user && c.user.login === author)
               .filter(c => !(c.body || '').includes(MARKER))
               .filter(c => !(c.body || '').includes(INVALIDATED_FLAG))
               .map(c => c.body || '');
 
-            // Order sources: Newest active comment first, falling back to PR description
-            const textSources = [...activeAuthorComments.reverse(), pr.body || ''];
+            const textSources = [...activeAuthorComments.reverse()];
 
-            // Helper function to extract the most recent value for a given field regex
             function getLatestValue(regex) {
               for (const text of textSources) {
                 const match = text.match(regex);
-                if (match && match[1] !== undefined) {
-                  return match[1].trim();
-                }
+                if (match && match[1] !== undefined) return match[1].trim();
               }
               return null;
             }
 
             // ==========================================
-            // LEVEL 1: PRTI Data Validation Logic Engine
+            // LEVEL 1: PRTI Data Validation
             // ==========================================
             const checks = [
               { label: 'PR Time',    re: /PR\s*Time\s*:\s*(.*)$/im,    type: 'time' },
@@ -128,31 +190,25 @@ jobs:
             for (const c of checks) {
               const rawValue = getLatestValue(c.re);
 
-              // Check 1: Empty or whitespace only
               if (rawValue === null || rawValue === '') {
                 level1Errors.push(`${c.label} (Empty/Missing)`);
                 continue;
               }
-
-              // Check 2: Reject placeholders
               if (/^<.*>$/i.test(rawValue) || /^(n\/a|na|tbd|todo|\?+)$/i.test(rawValue)) {
                 level1Errors.push(`${c.label} (Invalid placeholder: "${rawValue}")`);
                 continue;
               }
 
-              // Check 3: Reject negative numbers
-              if (rawValue.includes('-')) {
-                level1Errors.push(`${c.label} (Cannot be negative: "${rawValue}")`);
-                continue;
-              }
-
-              // Check 4: Type-specific validation
               if (c.type === 'number') {
-                if (!/^\d+$/.test(rawValue)) {
+                if (/^-/.test(rawValue)) {
+                  level1Errors.push(`${c.label} (Cannot be negative: "${rawValue}")`);
+                } else if (!/^\d+$/.test(rawValue)) {
                   level1Errors.push(`${c.label} (Must be a non-negative number, e.g., 0)`);
                 }
               } else if (c.type === 'time') {
-                if (!/\d/.test(rawValue)) {
+                if (/^-/.test(rawValue)) {
+                  level1Errors.push(`${c.label} (Cannot be negative: "${rawValue}")`);
+                } else if (!/\d/.test(rawValue)) {
                   level1Errors.push(`${c.label} (Must contain a valid time duration, e.g., 2h or 30m)`);
                 }
               }
@@ -164,26 +220,22 @@ jobs:
             // LEVEL 2: Review (.md) Attachment Validation
             // ==========================================
             const level2Errors = [];
-            
-            // Flexibly match markdown links pointing to .md files or GitHub user uploads
             const attachmentRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi;
 
             if (isLevel1Passed) {
               core.info('Level 1 passed. Proceeding with Level 2 attachment check...');
-              
               let foundMdAttachment = null;
 
-              // Scan sources for the latest valid markdown attachment link
               for (const text of textSources) {
                 let match;
-                // Reset regex global state for iteration
                 attachmentRegex.lastIndex = 0;
                 while ((match = attachmentRegex.exec(text)) !== null) {
                   const linkText = match[1];
                   const url = match[2];
-
-                  if (linkText.toLowerCase().endsWith('.md') || url.toLowerCase().endsWith('.md') || url.includes('/user-attachments/')) {
-                    foundMdAttachment = { fileName: linkText, url: url };
+                  
+                  const isMarkdown = linkText.toLowerCase().endsWith('.md') || url.toLowerCase().endsWith('.md');
+                  if (isMarkdown) {
+                    foundMdAttachment = { fileName: linkText, url };
                     break;
                   }
                 }
@@ -191,37 +243,55 @@ jobs:
               }
 
               if (!foundMdAttachment) {
-                level2Errors.push('Review File (.md attachment missing in comment/description)');
+                level2Errors.push('Review File (.md attachment missing - attach it in a PR comment)');
               } else {
-                try {
-                  core.info(`Found attachment candidate: ${foundMdAttachment.fileName} -> ${foundMdAttachment.url}`);
-                  
-                  // Fetch attachment with token authorization header
-                  const response = await github.rest.request('GET ' + foundMdAttachment.url, {
-                    headers: {
-                      'Accept': '*/*'
-                    }
-                  });
-
-                  const content = typeof response.data === 'string' 
-                    ? response.data.trim() 
-                    : JSON.stringify(response.data || '').trim();
-
-                  if (!content || content.length === 0) {
-                    level2Errors.push(`Review File "${foundMdAttachment.fileName}" (Attached file is empty / 0 bytes)`);
-                  } else {
-                    core.info(`Level 2 check passed for file: ${foundMdAttachment.fileName} (${content.length} characters)`);
+              // Security: only fetch URLs from trusted GitHub domains to prevent SSRF / token leakage.
+                  const TRUSTED_HOSTS = [
+                    'github.com',
+                    'raw.githubusercontent.com',
+                    'user-attachments.githubusercontent.com',
+                    'objects.githubusercontent.com'
+                  ];
+                  let isTrustedUrl = false;
+                  try {
+                    const parsedUrl = new URL(foundMdAttachment.url);
+                    isTrustedUrl = TRUSTED_HOSTS.some(host =>
+                      parsedUrl.hostname === host || parsedUrl.hostname.endsWith('.' + host)
+                    );
+                  } catch (_) {
+                    isTrustedUrl = false;
                   }
-                } catch (err) {
-                  core.warning('Could not directly download attachment body via API: ' + err.message);
-                  // Verification fallback: If link is present and ends with .md, accept it
-                  if (!foundMdAttachment.fileName.toLowerCase().endsWith('.md') && !foundMdAttachment.url.toLowerCase().endsWith('.md')) {
-                    level2Errors.push('Review File (Attachment must be a .md file)');
+                  if (!isTrustedUrl) {
+                    level2Errors.push(`Review File "${foundMdAttachment.fileName}" (Attachment URL must be from a trusted GitHub domain)`);
                   } else {
-                    core.info('Attachment URL verified based on markdown link structure.');
+                  try {
+                    core.info(`Found attachment candidate: ${foundMdAttachment.fileName} -> ${foundMdAttachment.url}`);
+                    // Private-repo user-attachment URLs frequently reject the Actions token.
+                    // Do not retry - fall back to structural verification below.
+                    const response = await github.rest.request('GET ' + foundMdAttachment.url, {
+                      headers: { 'Accept': '*/*' },
+                      request: { retries: 0 }
+                    });
+
+                    const content = typeof response.data === 'string'
+                      ? response.data.trim()
+                      : JSON.stringify(response.data || '').trim();
+
+                    if (!content) {
+                      level2Errors.push(`Review File "${foundMdAttachment.fileName}" (Attached file is empty / 0 bytes)`);
+                    } else {
+                      core.info(`Level 2 passed: ${foundMdAttachment.fileName} (${content.length} characters)`);
+                    }
+                  } catch (err) {
+                    core.warning('Could not download attachment body via API (expected on private repos): ' + err.message);
+                    if (!foundMdAttachment.fileName.toLowerCase().endsWith('.md') && !foundMdAttachment.url.toLowerCase().endsWith('.md')) {
+                      level2Errors.push('Review File (Attachment must be a .md file)');
+                    } else {
+                      core.info('Attachment URL verified based on markdown link structure.');
+                    }
                   }
                 }
-              }
+                }
             } else {
               core.info('Level 1 check failed. Skipping Level 2 check until Level 1 passes.');
             }
@@ -229,9 +299,8 @@ jobs:
             const allValid = isLevel1Passed && level2Errors.length === 0;
             const combinedErrors = [...level1Errors, ...level2Errors];
 
-            // 4. Build status message and contextual banners
+            // 4. Contextual banners
             let bannerLines = [];
-
             if (isSynchronize) {
               bannerLines = [
                 '> [!WARNING]',
@@ -264,13 +333,12 @@ jobs:
               ];
             }
 
-            // 5. Assemble full sticky comment body
             const bodyLines = [
               MARKER,
               '## PRTI & Review Process Enforcement',
               '',
               ...bannerLines,
-              'Hi @' + author + ', please provide your **PRTI details** and attach your **Review Process `.md` file** in the PR description or a comment.',
+              'Hi @' + author + ', please provide your **PRTI details** and attach your **Review Process `.md` file** in a **comment** on this PR.',
               '',
               '### Required Checklist:',
               '1. **Level 1 (PRTI Format):**',
@@ -281,11 +349,11 @@ jobs:
               '```',
               '2. **Level 2 (Review Attachment):** Attach a non-empty review document (e.g., `review_process.md`).',
               '',
-              '| Level | Field / File | Validation Rule |',
-              '| :---: | :--- | :--- |',
-              '| **L1** | PR Time / TI Time | Must contain valid time duration (`2h`, `30m`) |',
-              '| **L1** | PR Defects | Must be a non-negative number (`0`, `1`) |',
-              '| **L2** | Review File | Must attach a non-empty `.md` file |',
+              '| Level | Field| Validation Rule | Definition |',
+              '| :---: | :--- | :--- | :--- |',
+              '| **L1** | PR Time / TI Time | Must contain valid time duration (`2h`, `30m`) | **PR Time:** Total time spent for personal review. <br> **TI Time:** Time spent on Team inspection (TI) meeting, if meeting is not held 0h can be entered. |',
+              '| **L1** | PR Defects | Must be a non-negative number (`0`, `1`) | Number of defects or issues found during personal review. |',
+              '| **L2** | Review File | Must attach a non-empty `.md` file | A markdown file containing the information about the review process. |',
               '',
               '---',
               ...statusLines,
@@ -297,30 +365,23 @@ jobs:
 
             // 6. Update or create sticky comment
             const existingSticky = comments.find(c => (c.body || '').includes(MARKER));
-
             if (existingSticky) {
-              await github.rest.issues.updateComment({
-                owner, repo, comment_id: existingSticky.id, body
-              });
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existingSticky.id, body });
             } else {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: prNumber, body
-              });
+              await github.rest.issues.createComment({ owner, repo, issue_number: prNumber, body });
             }
 
-            // 7. Update Commit Status (Controls Merge Blocking)
+            // 7. Commit status (drives merge blocking via branch protection)
             const description = allValid
               ? 'PRTI and Review attachment checks passed'
               : ('Validation failed: ' + combinedErrors.join(', ')).slice(0, 140);
 
             await github.rest.repos.createCommitStatus({
-              owner,
-              repo,
-              sha: headSha,
+              owner, repo, sha: headSha,
               context: STATUS_CONTEXT,
               state: allValid ? 'success' : 'failure',
               description,
-              target_url: 'https://github.com/' + owner + '/' + repo + '/pull/' + prNumber
+              target_url: `https://github.com/${owner}/${repo}/pull/${prNumber}`
             });
 
             if (allValid) {
