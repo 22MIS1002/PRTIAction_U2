@@ -13,9 +13,7 @@ name: PRTI Enforcement
       - reopened
       - synchronize
       - ready_for_review
-    branches:
-      - develop
-      - release/**
+      
   issue_comment:
     types:
       - created
@@ -32,9 +30,7 @@ concurrency:
 jobs:
   prti-check:
     if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && github.event.issue.pull_request)
-    runs-on:
-      group: xpf-runners
-      labels: [self-hosted, Linux, x64]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Validate PRTI data & Review attachment, update sticky comment, set commit status
